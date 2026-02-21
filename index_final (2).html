@@ -5701,6 +5701,10 @@ const THEMES = [
         if (id === 'screen-admin') loadAdminDashboard();
         if (id === 'screen-lobby' && typeof AdManager !== 'undefined') AdManager.showNativeAd();
     }
+
+    function openGameSelector() {
+        showModal('modal-game-selector');
+    }
     function attemptExit() { 
         // Oyun aktifse veya oyun ekranlarındaysa uyarı göster
         if (game.active || currentScreen === 'screen-game' || currentScreen === 'screen-word-game' || currentScreen === 'screen-wait' || currentScreen === 'screen-word-lobby') {
@@ -7511,38 +7515,57 @@ if (game.isPvc && game.active) {
     }
     // --- PROFESYONEL RÖVANŞ SİSTEMİ (V4.0 - SENKRONİZE) ---
 
-    function endGameLocal(r, amount) {
+    function endGameLocal(result, amountOrReason) {
         // 1. ÖNCE ARKA PLANI DURDUR
         game.active = false;
         stopTimer();
 
-        // 2. WIN vs LOSE HANDLING
-        if (r === 'win') {
-            // === WIN PATH: Show Piggy Bank Animation (NO MODAL) ===
-            safeConfetti(); // Trigger gold animation if amount > 0
-            if (amount > 0) {
-                animateGoldChange(amount);
-            } else {
-                // Klasik modda sandık kazanma şansı
-            }
+        let status = result;
+        let amount = 0;
 
-            // Show piggy bank overlay instead of modal
+        // Online modda result 'p1' veya 'p2' olabilir, amountOrReason ise reason ('time_out' vb.)
+        if (game.mode === 'online') {
+            if (result === game.role) status = 'win';
+            else if (result === 'draw') status = 'draw';
+            else status = 'lose';
+
+            if (status === 'win') amount = 100; // Standart kazanç
+        } else {
+            if (typeof amountOrReason === 'number') amount = amountOrReason;
+        }
+
+        // 2. WIN vs LOSE HANDLING
+        if (status === 'win') {
+            // === WIN PATH: Show Piggy Bank Animation (NO MODAL) ===
+            safeConfetti();
+            if (amount > 0) animateGoldChange(amount);
+
+            // Show piggy bank overlay
             showPiggyWin(amount || 0);
 
         } else {
-            // === LOSE PATH: Keep Original Modal (UNCHANGED) ===
+            // === LOSE/DRAW PATH: Show Original Modal ===
             document.getElementById('endButtons').style.display = 'flex';
-            document.getElementById('endTitle').innerText = 'KAYBETTİN';
-            document.getElementById('endTitle').style.color = "#e74c3c";
+            const title = document.getElementById('endTitle');
+            const msg = document.getElementById('endMsg');
 
-            // [BOUNTY FIX] Gizli sayıyı gösterme
-            if (game.mode === 'bounty') {
-                document.getElementById('endMsg').innerText = "Cevap: ??? (GİZLİ)";
+            if (status === 'lose') {
+                title.innerText = 'KAYBETTİN';
+                title.style.color = "#e74c3c";
+                msg.innerText = (game.mode === 'bounty') ? "Cevap: ??? (GİZLİ)" : "Cevap: " + game.secret;
             } else {
-                document.getElementById('endMsg').innerText = "Cevap: " + game.secret;
+                title.innerText = 'BERABERE';
+                title.style.color = "#f1c40f";
+                msg.innerText = "Dostluk kazandı!";
             }
 
-            if (document.getElementById('rematchSettings')) document.getElementById('rematchSettings').style.display = 'none';
+            // Online modda rövanş ayarlarını göster
+            if (game.mode === 'online') {
+                if (document.getElementById('rematchSettings')) document.getElementById('rematchSettings').style.display = 'block';
+            } else {
+                if (document.getElementById('rematchSettings')) document.getElementById('rematchSettings').style.display = 'none';
+            }
+
             if (document.getElementById('incomingRematchArea')) document.getElementById('incomingRematchArea').style.display = 'none';
             document.getElementById('rematchStatus').innerText = "";
 
@@ -7551,24 +7574,19 @@ if (game.isPvc && game.active) {
 
         // 3. KARİYER MODU İLERLEME MANTIĞI
         try {
-            if (game.mode === 'career' && r === 'win') {
-                // FIX: Tür uyuşmazlığını önlemek için sayıya çeviriyoruz
+            if (game.mode === 'career' && status === 'win') {
                 const currentLvl = parseInt(user.careerLevel) || 1;
                 const playedLvl = parseInt(game.careerLvlIdx);
 
-                // Sadece bulunduğun seviyeyi oynarsan ilerleme kaydedilir
                 if (playedLvl === currentLvl) {
-
                     let wins = parseInt(user.careerWins) || 0;
                     wins++;
                     user.careerWins = wins;
 
-                    // HEDEF: 10 Galibiyet
                     if (wins >= 10) {
                         if (user.careerLevel < 5) {
                             user.careerLevel++;
                             user.careerWins = 0;
-
                             if (user.name) {
                                 db.ref('users/' + user.name).update({
                                     careerLevel: user.careerLevel,
@@ -7576,20 +7594,17 @@ if (game.isPvc && game.active) {
                                 });
                             }
                             localStorage.setItem("careerLevel", user.careerLevel);
-
                             showToast("🎉 TEBRİKLER! BİR SONRAKİ SEVİYE AÇILDI!");
                             safeConfetti();
                         } else {
                             showToast("🏆 KARİYER TAMAMLANDI! ARTIK ŞAMPİYONSUN!");
                         }
                     } else {
-                        let left = 10 - wins;
                         if (user.name) {
                             db.ref('users/' + user.name).update({ careerWins: wins });
                         }
-                        showToast(`✅ İlerleme Kaydedildi: ${wins}/10 (Sonraki seviye için ${left} kaldı)`);
+                        showToast(`✅ İlerleme: ${wins}/10`);
                     }
-
                     updateLobbyUI();
                 }
             }
@@ -7802,188 +7817,108 @@ function startSingle() {
         closeModal('modal-end');
         closePiggyWin();
 
-        // Word Game Replay - TÜM MODLAR
-        if (currentScreen === 'screen-word-game' || wordGameState.active === false) {
-            // Reklam kontrolü
+        // 1. KELİME OYUNU REPLAY
+        if (currentScreen === 'screen-word-game') {
             checkWordGameAd();
-
-            // Oyunu yeniden başlat
             setTimeout(() => {
                 restartWordGame();
-                // Tekrar oyna butonlarını göster
-                const piggyBtns = document.getElementById('piggyButtons');
-                if (piggyBtns) piggyBtns.style.display = 'none';
             }, 300);
             return;
         }
 
+        // 2. SAYI OYUNU MODLARI
         if (game.mode === 'single') {
-            const d = game.diff || 4;
-            document.getElementById('singleDiffSelect').value = d;
             startSingle();
-            closeModal('modal-end');
             return;
         }
 
-        // Kariyer Moduysa direkt o seviyeyi tekrar başlat
         if (game.mode === 'career') {
-            if (game.careerLvlIdx !== undefined) {
-                selectedCareerLvl = game.careerLvlIdx;
-            }
             launchCareerGame();
-            closeModal('modal-end');
             return;
         }
 
-        // Online Mod: Rövanş Teklif Modalını Aç
-        openRematchModal();
+        if (game.mode === 'bounty') {
+            openBountyScreen();
+            return;
+        }
+
+        if (game.mode === 'online') {
+            if (!game.room || !game.role) return;
+            const d = parseInt(document.getElementById('rematchDiffSelect').value) || game.diff || 4;
+
+            db.ref('rooms/' + game.room + '/rematch/' + game.role).set({
+                wants: true,
+                diff: d
+            });
+
+            const btn = document.getElementById('btnRematch');
+            if (btn) {
+                btn.disabled = true;
+                btn.innerText = "İSTEK GÖNDERİLDİ...";
+            }
+
+            const status = document.getElementById('rematchStatus');
+            if (status) {
+                status.innerText = "Rakip bekleniyor...";
+                status.style.display = 'block';
+            }
+
+            showModal('modal-end');
+            return;
+        }
+    }
+
+    function acceptRematch() {
+        if (!game.room || !game.role) return;
+        const d = parseInt(document.getElementById('rematchDiffSelect').value) || game.diff || 4;
+
+        db.ref('rooms/' + game.room + '/rematch/' + game.role).set({
+            wants: true,
+            diff: d
+        });
+        showToast("Teklif kabul edildi!");
+    }
+
+    function rejectRematch() {
+        if (!game.room) return;
+        db.ref('rooms/' + game.room + '/rematch').update({
+            rejected: true,
+            rejecter: user.name
+        });
+        closeModal('modal-end');
+        leaveRoom();
+    }
+
+    function leaveRoom() {
+        if (game.room) {
+            db.ref('rooms/' + game.room).off();
+        }
+        game.active = false;
+        game.room = "";
+        stopTimer();
+        closeModal('modal-end');
+        closeModal('modal-disconnect');
+        closePiggyWin();
+        changeScreen('screen-lobby');
     }
 
     // Piggy win kapatma yardımcı fonksiyonu
     function closePiggyWin() {
         const overlay = document.getElementById('piggyWinOverlay');
-        const coinLayer = document.getElementById('coinDropLayer');
-        const fillBar = document.getElementById('piggyFillBar');
-        const btns = document.getElementById('piggyButtons');
+        if (!overlay) return;
 
-        if (overlay) overlay.style.display = 'none';
-        if (coinLayer) coinLayer.innerHTML = '';
-        if (fillBar) fillBar.style.width = '0%';
-        if (btns) btns.style.display = 'none';
+        overlay.classList.remove('show');
+        setTimeout(() => {
+            overlay.style.display = 'none';
+            const coinLayer = document.getElementById('coinDropLayer');
+            const fillBar = document.getElementById('piggyFillBar');
+            const btns = document.getElementById('piggyButtons');
+            if (coinLayer) coinLayer.innerHTML = '';
+            if (fillBar) fillBar.style.width = '0%';
+            if (btns) btns.style.display = 'none';
+        }, 500);
     }
 
-    // --- RÖVANŞ SİSTEMİ (STABİL v2) ---
-    function openRematchModal() {
-        if (!game.room) return;
-        showModal('modal-rematch-offer');
-    }
-
-    function sendRematchOffer() {
-        const d = parseInt(document.getElementById('rematchOfferDiff').value);
-        closeModal('modal-rematch-offer');
-
-        showToast("Teklif gönderildi! ⏳");
-        const statusEl = document.getElementById('rematchStatus');
-        if (statusEl) {
-            statusEl.innerText = "Rakip bekleniyor...";
-            statusEl.style.display = 'block';
-        }
-
-        // Teklifi 'offer' düğümüne yazıyoruz
-        db.ref('rooms/' + game.room + '/rematch/offer').set({
-            from: game.role, // 'p1' veya 'p2'
-            diff: d,
-            timestamp: Date.now()
-        });
-
-        // Önceki yanıtları temizle
-        db.ref('rooms/' + game.room + '/rematch/response').remove();
-    }
-
-    function respondToRematch(accepted) {
-        closeModal('modal-rematch-accept');
-
-        if (accepted) {
-            showToast("Kabul ettin! Oyun hazırlaniyor...");
-            db.ref('rooms/' + game.room + '/rematch/response').set('accepted');
-        } else {
-            showToast("Reddettin.");
-            db.ref('rooms/' + game.room + '/rematch/response').set('rejected');
-        }
-    }
-
-    // Bu fonksiyon listenRoom içinde çağrılacak
-    function checkRematchUpdates(r) {
-        if (!r.rematch) return;
-
-    // 1. Teklif Kontrolü
-        if (r.rematch.offer) {
-            const offer = r.rematch.offer;
-            // Eğer teklif BENDEN DEĞİLSE ve henüz yanıtlanmadıysa
-            if (offer.from !== game.role && !r.rematch.response) {
-                // Modalı sadece kapalıysa aç (sürekli açılmasın)
-                if (document.getElementById('modal-rematch-accept').style.display !== 'flex') {
-                    document.getElementById('rematchRequestText').innerText = `Rakip ${offer.diff} haneli oyun istiyor.`;
-                    showModal('modal-rematch-accept');
-                }
-            }
-        }
-
-        // 2. Yanıt Kontrolü
-        if (r.rematch.response) {
-            const res = r.rematch.response;
-            if (res === 'rejected') {
-                showToast("Rövanş reddedildi. ❌");
-                const statusEl = document.getElementById('rematchStatus');
-                if (statusEl) statusEl.innerText = "Reddedildi.";
-
-                // State'i temizle ki döngüye girmesin (Sadece Host yapsın veya 2sn sonra)
-                if (game.role === 'p1') {
-                    setTimeout(() => db.ref('rooms/' + game.room + '/rematch').remove(), 3000);
-                }
-            } else if (res === 'accepted') {
-                const statusEl = document.getElementById('rematchStatus');
-                if (statusEl) statusEl.innerText = "Oyun Başlıyor... 🚀";
-
-                // HOST (P1) OYUNU BAŞLATIR
-                if (game.role === 'p1') {
-                    const newDiff = r.rematch.offer.diff || 4;
-                    startNewGame(newDiff);
-                }
-            }
-        }
-    }
-
-    function startNewGame(d) {
-        // Hak hesapla
-        let rights = 15;
-        if (d === 5) rights = 20;
-        if (d === 6) rights = 25;
-        if (d === 7) rights = 30;
-
-        const newSecret = generateNumber(d);
-
-        // Odayı sıfırla ve başlat
-        db.ref('rooms/' + game.room).update({
-            winner: null,
-            rematch: null, // Rematch state'ini temizle
-            moves: null,
-            status: 'playing',
-            turn: 'p1',
-            rights_p1: rights,
-            rights_p2: rights,
-            secret: newSecret,
-            startTime: Date.now(),
-            'config/diff': d
-        });
-    }
-
-    // Eski fonksiyonları temizlemek için placeholder (çakışmasın)
-    function acceptRematchLegacy() { }
-    function rejectRematchLegacy() { }
-    function resetUI() { document.getElementById('history').innerHTML = ""; document.getElementById('guessInput').value = ""; document.getElementById('gameChatBox').innerHTML = ""; document.getElementById('endButtons').style.display = 'none'; }
-    function leaveRoom() {
-        game.active = false;
-        stopTimer();
-        sessionStorage.removeItem('yh_game_room');
-        sessionStorage.removeItem('yh_game_role');
-
-        resetUI(); // <--- EKLEME: Çıkarken ekranı temizle
-        closeModal('modal-end');
-        closeModal('modal-disconnect');
-        changeScreen('screen-lobby');
-
-        if (game.room) {
-            db.ref('rooms/' + game.room).off();
-            db.ref('rooms/' + game.room + '/chat').off();
-            db.ref('rooms/' + game.room + '/moves').off();
-            db.ref('rooms/' + game.room).onDisconnect().cancel();
-            if (game.role === 'p1') {
-                db.ref('rooms/' + game.room).remove();
-            }
-            game.room = null;
-        }
-    }
     function levelUpCareer() {
         careerLevel++;
         localStorage.setItem("careerLevel", careerLevel);
@@ -8380,7 +8315,6 @@ function filterAdminUsers(mode) { currentAdminTab = mode; renderAdminView(); }
             if (!r) return;
 
             // RÖVANŞ KONTROLÜ (YENİ)
-            checkRematchUpdates(r);
 
             // Bağlantı kopma kontrolü
             if (game.active && r.status === 'playing' && (!r.p1 || !r.p2)) {
@@ -9943,49 +9877,7 @@ function filterAdminUsers(mode) { currentAdminTab = mode; renderAdminView(); }
     }
 
     function closePiggyAndReplay() {
-        const overlay = document.getElementById('piggyWinOverlay');
-        if(overlay) {
-            overlay.classList.remove('show');
-            setTimeout(() => { overlay.style.display = 'none'; }, 500);
-        }
-        // Logic to replay depends on mode.
-        // For single player:
-
-        // Word Game Replay
-        if (currentScreen === 'screen-word-game') {
-             // Restart with last config
-             // We stored config in wordGameState?
-             // wordGameState has length and mode.
-
-             // Re-run setup logic manually or extract `restartWordGame`?
-             // Let's modify `startWordGameCustom` to optionally take params?
-             // Or just set the DOM elements and call it?
-             // But DOM might have changed.
-
-             // Better: define `restartWordGame()` that uses `wordGameState` params.
-             restartWordGame();
-             return;
-        }
-
-        if (game.mode === 'single') {
-            startSingle(); // Restarts with last settings
-        } else if (game.mode === 'bounty') {
-            openBountyScreen(); // Go back to list
-        } else {
-            // Online or Career
-            closeModal('modal-end'); // Should not be open but just in case
-            // If career, maybe next level?
-            if (game.mode === 'career') {
-               openCareerMap();
-            } else {
-               // Online rematch logic is separate, usually handled by modal-end.
-               // But if we used piggy for online win, we need to show rematch options.
-               // For now, let's just go to lobby for simplicity or show the old end modal?
-               // The user wanted a "nice animation".
-               // Let's just go to lobby for now to be safe.
-               changeScreen('screen-lobby');
-            }
-        }
+        requestRematch();
     }
 
     function closePiggyAndExit() {

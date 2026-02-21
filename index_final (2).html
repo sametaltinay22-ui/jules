@@ -7820,6 +7820,7 @@ function startSingle() {
         // 1. KELİME OYUNU REPLAY
         if (currentScreen === 'screen-word-game') {
             checkWordGameAd();
+            if (wordGameState.mode !== 'online') cleanRoom();
             setTimeout(() => {
                 restartWordGame();
             }, 300);
@@ -7828,16 +7829,19 @@ function startSingle() {
 
         // 2. SAYI OYUNU MODLARI
         if (game.mode === 'single') {
+            cleanRoom();
             startSingle();
             return;
         }
 
         if (game.mode === 'career') {
+            cleanRoom();
             launchCareerGame();
             return;
         }
 
         if (game.mode === 'bounty') {
+            cleanRoom();
             openBountyScreen();
             return;
         }
@@ -7889,7 +7893,7 @@ function startSingle() {
         leaveRoom();
     }
 
-    function leaveRoom() {
+    function cleanRoom() {
         if (game.room) {
             db.ref('rooms/' + game.room).off();
         }
@@ -7899,6 +7903,10 @@ function startSingle() {
         closeModal('modal-end');
         closeModal('modal-disconnect');
         closePiggyWin();
+    }
+
+    function leaveRoom() {
+        cleanRoom();
         changeScreen('screen-lobby');
     }
 
@@ -8380,11 +8388,10 @@ function filterAdminUsers(mode) { currentAdminTab = mode; renderAdminView(); }
             }
 
             // --- OYUN SONU VE RÖVANŞ YÖNETİMİ (FİXED) ---
-            if (r.winner) {
+            if (r.winner && r.status !== 'playing') {
                 // Eğer modal zaten açıksa tekrar çalıştırma
                 const modalEnd = document.getElementById('modal-end');
-                if (modalEnd.style.display !== 'flex') {
-                    // Fonksiyon ismini düzelttik: endGameLocal
+                if (modalEnd && modalEnd.style.display !== 'flex') {
                     endGameLocal(r.winner, r.endReason);
                 }
             }
@@ -8392,13 +8399,15 @@ function filterAdminUsers(mode) { currentAdminTab = mode; renderAdminView(); }
             // --- SENKRONİZE RÖVANŞ MANTIĞI (V5 - CRASH FIX) ---
             if (r.winner && r.rematch) {
 
-                // 1. DURUM: Biri reddetti mi?
-                if (r.rematch.rejected) {
+                // 1. DURUM: Biri reddetti mi? (Sadece oyun aktif değilse ve hala odadaysak)
+                if (r.rematch.rejected && !game.active && game.room === c) {
                     const msg = (r.rematch.rejecter === user.name)
                         ? "Teklifi reddettin."
                         : "Rakip teklifi reddetti.";
                     showToast(msg);
-                    setTimeout(() => leaveRoom(), 1500);
+                    setTimeout(() => {
+                        if (!game.active && game.room === c) leaveRoom();
+                    }, 1500);
                     return;
                 }
 
@@ -10016,8 +10025,11 @@ function filterAdminUsers(mode) { currentAdminTab = mode; renderAdminView(); }
             stopWordTimer();
             AudioEngine.error();
             setTimeout(() => {
-                alert(`MAALESEF BİLEMEDİN!\nDoğru Kelime: ${wordGameState.secret}`);
-                changeScreen('screen-lobby');
+                document.getElementById('endTitle').innerText = 'KAYBETTİN';
+                document.getElementById('endTitle').style.color = "#e74c3c";
+                document.getElementById('endMsg').innerText = "Maalesef bilemedin! Kelime: " + wordGameState.secret;
+                document.getElementById('endButtons').style.display = 'flex';
+                showModal('modal-end');
             }, 500);
         }
 
@@ -10037,8 +10049,11 @@ function filterAdminUsers(mode) { currentAdminTab = mode; renderAdminView(); }
                     AudioEngine.error();
                     showToast("💻 Bilgisayar Kelimeyi Buldu: " + wordGameState.secret);
                     setTimeout(() => {
-                        alert("BİLGİSAYAR KAZANDI! 🤖");
-                        changeScreen('screen-lobby');
+                        document.getElementById('endTitle').innerText = 'BİLGİSAYAR KAZANDI! 🤖';
+                        document.getElementById('endTitle').style.color = "#e74c3c";
+                        document.getElementById('endMsg').innerText = "Kelime: " + wordGameState.secret;
+                        document.getElementById('endButtons').style.display = 'flex';
+                        showModal('modal-end');
                     }, 1000);
                 } else {
                     showToast(`🤖 Bilgisayar Tahmini: ${aiGuess}`);
@@ -10191,8 +10206,11 @@ function filterAdminUsers(mode) { currentAdminTab = mode; renderAdminView(); }
                 display.innerText = "00:00";
                 wordGameState.active = false;
                 AudioEngine.error();
-                alert("SÜRE BİTTİ! ⌛\nKelime: " + wordGameState.secret);
-                changeScreen('screen-lobby');
+                document.getElementById('endTitle').innerText = 'SÜRE BİTTİ! ⌛';
+                document.getElementById('endTitle').style.color = "#e74c3c";
+                document.getElementById('endMsg').innerText = "Kelime: " + wordGameState.secret;
+                document.getElementById('endButtons').style.display = 'flex';
+                showModal('modal-end');
                 return;
             }
 
@@ -10503,8 +10521,11 @@ function restartWordGame() {
             }
         }
 
+        // 4 saniye sonra lobiye dön (Eğer yeni oyun başlamadıysa)
         setTimeout(() => {
-            changeScreen('screen-lobby');
+            if (!wordGameState.active && currentScreen === 'screen-word-game') {
+                changeScreen('screen-lobby');
+            }
         }, 4000);
     }
 
@@ -10818,19 +10839,22 @@ function restartWordGame() {
                 });
             }
 
-            // Winner Logic
-            if (r.winner) {
-               if(wordGameState.active) {
-                   wordGameState.active = false;
-                   if (r.winner === user.name) {
-                       AudioEngine.win();
-                       alert("KAZANDIN! 🎉");
-                   } else {
-                       AudioEngine.error();
-                       alert("KAYBETTİN! 😞\nKelime: " + wordGameState.secret);
-                   }
-                   changeScreen('screen-lobby');
-               }
+            // Winner Logic (Rövanş uyumlu)
+            if (r.winner && wordGameState.active && r.status !== 'playing') {
+                wordGameState.active = false;
+                stopWordTimer();
+
+                if (r.winner === user.name) {
+                    AudioEngine.win();
+                    showPiggyWin(100);
+                } else {
+                    AudioEngine.error();
+                    document.getElementById('endTitle').innerText = 'KAYBETTİN';
+                    document.getElementById('endTitle').style.color = "#e74c3c";
+                    document.getElementById('endMsg').innerText = "Kelime: " + wordGameState.secret;
+                    document.getElementById('endButtons').style.display = 'flex';
+                    showModal('modal-end');
+                }
             }
 
             // Wait Logic (P2 Joined)

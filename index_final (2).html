@@ -5039,7 +5039,9 @@ text-align: center;
             <!-- KULLANICILAR - EN BAŞA TAŞINDI -->
             <div class="admin-section">
                 <h3>👥 Kullanıcılar</h3>
+                <input type="text" id="adminUserSearch" placeholder="Kullanıcı Ara..." oninput="renderAdminView()" style="font-size:0.8rem; padding:8px; margin-bottom:5px; width:100%;">
                 <div style="display:flex;gap:5px;margin-bottom:5px;">
+                    <button id="btnFilterAll" class="btn-dark" style="flex:1;padding:5px;font-size:0.7rem;" onclick="filterAdminUsers('all')">♾️ Tümü</button>
                     <button id="btnFilterOnline" class="btn-green" style="flex:1;padding:5px;font-size:0.7rem;" onclick="filterAdminUsers('online')">🟢 Online</button>
                     <button id="btnFilterOffline" class="btn-grey" style="flex:1;padding:5px;font-size:0.7rem;" onclick="filterAdminUsers('offline')">⚫ Offline</button>
                     <button id="btnFilterNew" class="btn-blue" style="flex:1;padding:5px;font-size:0.7rem;" onclick="filterAdminUsers('new')">🆕 Yeni</button>
@@ -8028,15 +8030,28 @@ function startSingle() {
         const list = document.getElementById('adminUserList');
         if (!list) return;
 
+        const searchTerm = document.getElementById('adminUserSearch')?.value.toLowerCase() || '';
         let html = '';
         const users = adminData.users || {};
         const presence = adminData.presence || {};
 
         Object.keys(users).forEach(username => {
+            if (searchTerm && !username.toLowerCase().includes(searchTerm)) return;
+
             const userData = users[username];
             const isOnline = presence[username] && presence[username].status === 'online';
-            const statusColor = isOnline ? '#2ecc71' : '#95a5a6';
+
+            // Filtreleme
+            if (currentAdminTab === 'online' && !isOnline) return;
+            if (currentAdminTab === 'offline' && isOnline) return;
+            if (currentAdminTab === 'new') {
+                const dayMs = 24 * 60 * 60 * 1000;
+                const isNew = userData.joinDate && (Date.now() - userData.joinDate < dayMs);
+                if (!isNew) return;
+            }
+
             const statusText = isOnline ? '🟢' : '⚫';
+            const regDateStr = userData.joinDate ? new Date(userData.joinDate).toLocaleString('tr-TR') : 'Bilinmiyor';
 
             html += `
                 <div class="list-item" style="display:flex; justify-content:space-between; align-items:center; padding:10px; background:#f8f9fa; border-radius:8px; margin-bottom:5px;">
@@ -8044,7 +8059,8 @@ function startSingle() {
                         <span style="font-size:1.2rem;">${statusText}</span>
                         <div>
                             <div style="font-weight:bold; color:#2d3436;">${escapeHtml(username)}</div>
-                            <small style="color:#666;">Altın: ${userData.gold || 0} | Seviye: ${userData.level || 1}</small>
+                            <small style="color:#666;">Altın: ${userData.gold || 0} | Seviye: ${userData.level || 1}</small><br>
+                            <small style="color:#888; font-size:0.65rem;">📅 Kayıt: ${regDateStr}</small>
                         </div>
                     </div>
                     <div style="display:flex; gap:5px;">
